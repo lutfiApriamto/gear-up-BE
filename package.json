@@ -1,0 +1,35 @@
+{
+  "name": "server",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@sparticuz/chromium": "^141.0.0",
+    "@supabase/supabase-js": "^2.75.1",
+    "axios": "^1.12.2",
+    "bcrypt": "^6.0.0",
+    "chart.js": "^4.5.1",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "csv-writer": "^1.6.0",
+    "dotenv": "^17.2.3",
+    "exceljs": "^4.4.0",
+    "express": "^5.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "midtrans-client": "^1.4.3",
+    "mongodb": "^6.20.0",
+    "mongoose": "^8.19.1",
+    "multer": "^2.0.2",
+    "nodemailer": "^7.0.9",
+    "nodemon": "^3.1.10",
+    "puppeteer-core": "^24.25.0",
+    "uuid": "^13.0.0",
+    "xlsx": "^0.18.5"
+  }
+}
