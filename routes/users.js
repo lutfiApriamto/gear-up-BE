@@ -8,6 +8,7 @@ import { User } from '../models/User.js';
 import { Voucher } from '../models/Voucher.js';
 import { generateUniqueVoucherCode } from "../utils/generateVoucherCode.js";
 import { verifyUser, verifyAdmin } from '../middlewares/auth.js';
+import { Product } from '../models/Product.js';
 import { parsePagination } from '../middlewares/parsePagination.js';
 dotenv.config();
 const router = express.Router();
@@ -554,6 +555,8 @@ router.patch("/edit", verifyUser, async (req, res) => {
 // ==========================
 // GET USER DATA RUTE
 // ==========================
+
+// =====  1. Data Pribadi  =====
 router.get('/get-user', verifyUser, async(req,res) => {
   try {
     const userId = req.user._id;
