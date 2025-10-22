@@ -9,6 +9,7 @@ import { Voucher } from '../models/Voucher.js';
 import { generateUniqueVoucherCode } from "../utils/generateVoucherCode.js";
 import { verifyUser, verifyAdmin } from '../middlewares/auth.js';
 import { Product } from '../models/Product.js';
+import mongoose from "mongoose";
 import { parsePagination } from '../middlewares/parsePagination.js';
 dotenv.config();
 const router = express.Router();
@@ -549,8 +550,707 @@ router.patch("/edit", verifyUser, async (req, res) => {
 // CART USER RUTE
 // ==========================
 
+// =====  1. TAMBAH PRODUK KE KERANJANG  =====
+router.post("/cart/add", verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id; // dari middleware verifyUser
+    const { productId, quantity } = req.body;
 
+    // Validasi input
+    if (!productId) {
+      return res.status(400).json({ message: "ID produk diperlukan." });
+    }
 
+    const qty = Number(quantity) > 0 ? Number(quantity) : 1;
+
+    // Cari produk
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({ message: "Produk tidak ditemukan." });
+    }
+
+    // Cek apakah produk aktif
+    if (!product.isActive) {
+      return res.status(400).json({ message: "Produk ini tidak aktif atau tidak tersedia." });
+    }
+
+    // Cek stok produk
+    if (product.stock <= 0) {
+      return res.status(400).json({ message: "Produk ini sedang kehabisan stok." });
+    }
+
+    // Cari user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan." });
+    }
+
+    // Cek apakah produk sudah ada di keranjang
+    const existingItem = user.cart.find(
+      (item) => item.product.toString() === productId
+    );
+
+    if (existingItem) {
+      // Hitung total quantity setelah ditambahkan
+      const newQuantity = existingItem.quantity + qty;
+
+      if (newQuantity > product.stock) {
+        return res.status(400).json({
+          message: `Stok tidak mencukupi. Stok tersedia: ${product.stock}, jumlah di keranjang akan menjadi ${newQuantity}.`,
+        });
+      }
+
+      existingItem.quantity = newQuantity;
+    } else {
+      // Cek jika quantity yang diminta melebihi stok saat awal ditambahkan
+      if (qty > product.stock) {
+        return res.status(400).json({
+          message: `Stok tidak mencukupi. Stok tersedia: ${product.stock}, sedangkan anda meminta ${qty}.`,
+        });
+      }
+
+      user.cart.push({ product: productId, quantity: qty });
+    }
+
+    await user.save();
+
+    // Populate untuk kirim data produk yang lengkap
+    const updatedUser = await User.findById(userId).populate("cart.product");
+
+    res.status(200).json({
+      success: true,
+      message: "Produk berhasil ditambahkan ke keranjang.",
+      cart: updatedUser.cart,
+    });
+  } catch (error) {
+    console.error("❌ Error menambahkan ke keranjang:", error);
+    res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan saat menambahkan ke keranjang.",
+      error: error.message,
+    });
+  }
+});
+
+// =====  2. MENDAPATKAN DATA DAFTAR PRODUK DALAM KERANJANG  =====
+router.get('/cart', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { name, brand, category, gender } = req.query;
+
+    const user = await User.findById(userId).populate('cart.product');
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    // Hapus item keranjang yang produknya sudah tidak ada
+    const validCart = user.cart.filter(item => item.product !== null);
+    if (validCart.length !== user.cart.length) {
+      user.cart = validCart;
+      await user.save();
+    }
+
+    // Jika tidak ada query, kembalikan semua item
+    if (!name && !brand && !category && !gender) {
+      return res.status(200).json({
+        message: "Berhasil mengambil semua produk di keranjang",
+        cart: validCart
+      });
+    }
+
+    // Lakukan filter dinamis
+    const filteredCart = validCart.filter(item => {
+      const product = item.product;
+      let isMatch = true;
+
+      if (name) {
+        const regex = new RegExp(name, 'i');
+        isMatch = isMatch && regex.test(product.name);
+      }
+
+      if (brand) {
+        const regex = new RegExp(brand, 'i');
+        isMatch = isMatch && regex.test(product.brand);
+      }
+
+      if (category) {
+        const regex = new RegExp(category, 'i');
+        isMatch = isMatch && regex.test(product.category);
+      }
+
+      if (gender) {
+        isMatch = isMatch && product.gender === gender;
+      }
+
+      return isMatch;
+    });
+
+    if (filteredCart.length === 0) {
+      return res.status(404).json({
+        message: "Tidak ada produk di keranjang yang cocok dengan filter"
+      });
+    }
+
+    res.status(200).json({
+      message: "Berhasil mengambil data produk sesuai filter",
+      cart: filteredCart
+    });
+
+  } catch (error) {
+    console.error("Error mengambil keranjang:", error);
+    res.status(500).json({
+      message: "Gagal mengambil data keranjang",
+      error: error.message
+    });
+  }
+});
+
+// =====  3. HAPUS PRODUK DARI DAFTAR KERANJANG PENGGUNA  =====
+router.delete('/cart/:productId', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { productId } = req.params;
+
+    const user = await User.findById(userId).populate('cart.product');
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    // Periksa apakah produk ada di dalam keranjang
+    const productInCart = user.cart.find(
+      item => item.product && item.product._id.toString() === productId
+    );
+
+    if (!productInCart) {
+      return res.status(404).json({ message: "Produk tidak ditemukan di keranjang" });
+    }
+
+    // Hapus produk dari keranjang
+    user.cart = user.cart.filter(
+      item => item.product._id.toString() !== productId
+    );
+    await user.save();
+
+    // Populate data produk yang tersisa di keranjang
+    await user.populate({
+      path: 'cart.product',
+      select: 'name price stock productImagesURL'
+    });
+
+    res.status(200).json({
+      message: "Produk berhasil dihapus dari keranjang",
+      removedProductId: productId,
+      cart: user.cart
+    });
+
+  } catch (error) {
+    console.error("Error menghapus produk:", error);
+    res.status(500).json({
+      message: "Gagal menghapus produk dari keranjang",
+      error: error.message
+    });
+  }
+});
+
+// =====  4. TAMBAH QUANTITY PRODUK DIKERANJANG  =====
+router.patch('/cart/increase/:productId', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { productId } = req.params;
+
+    const user = await User.findById(userId).populate('cart.product');
+    if (!user) return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+
+    const item = user.cart.find(item => item.product && item.product._id.toString() === productId);
+    if (!item) return res.status(404).json({ message: "Produk tidak ditemukan di keranjang" });
+
+    const product = item.product;
+    if (!product.isActive) {
+      return res.status(400).json({ message: "Produk tidak aktif" });
+    }
+
+    // Cek stok
+    if (item.quantity >= product.stock) {
+      return res.status(400).json({ message: "Stok produk tidak mencukupi" });
+    }
+
+    // Tambah quantity
+    item.quantity += 1;
+    await user.save();
+
+    await user.populate({
+      path: 'cart.product',
+      select: 'name price stock productImagesURL'
+    });
+
+    res.status(200).json({
+      message: "Quantity produk berhasil ditambah",
+      productId,
+      newQuantity: item.quantity,
+      cart: user.cart
+    });
+
+  } catch (error) {
+    console.error("Error menambah quantity produk:", error);
+    res.status(500).json({ message: "Gagal menambah quantity produk", error: error.message });
+  }
+});
+
+// =====  5. KURANG QUANTITY PRODUK DIKERANJANG =====
+router.patch('/cart/decrease/:productId', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { productId } = req.params;
+
+    const user = await User.findById(userId).populate('cart.product');
+    if (!user) return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+
+    const itemIndex = user.cart.findIndex(
+      item => item.product && item.product._id.toString() === productId
+    );
+    if (itemIndex === -1) {
+      return res.status(404).json({ message: "Produk tidak ditemukan di keranjang" });
+    }
+
+    const item = user.cart[itemIndex];
+
+    if (item.quantity > 1) {
+      item.quantity -= 1;
+    } else {
+      // Jika quantity = 1, hapus produk dari keranjang
+      user.cart.splice(itemIndex, 1);
+    }
+
+    await user.save();
+
+    await user.populate({
+      path: 'cart.product',
+      select: 'name price stock productImagesURL'
+    });
+
+    res.status(200).json({
+      message: item.quantity > 0
+        ? "Quantity produk berhasil dikurangi"
+        : "Produk dihapus dari keranjang",
+      productId,
+      newQuantity: item.quantity || 0,
+      cart: user.cart
+    });
+
+  } catch (error) {
+    console.error("Error mengurangi quantity produk:", error);
+    res.status(500).json({ message: "Gagal mengurangi quantity produk", error: error.message });
+  }
+});
+
+// ====== 6. MENDAPATKAN JUMLAH PRODUK UNIK DALAM KERANJANG  ======
+router.get('/cart/count', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Temukan user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    // Hapus produk null jika ada
+    const validCart = user.cart.filter(item => item.product !== null);
+    if (validCart.length !== user.cart.length) {
+      user.cart = validCart;
+      await user.save();
+    }
+
+    // Hitung jumlah produk unik (bukan quantity)
+    const totalProducts = validCart.length;
+
+    res.status(200).json({
+      message: "Berhasil menghitung jumlah produk di keranjang",
+      totalProducts
+    });
+
+  } catch (error) {
+    console.error("❌ Error mengambil jumlah produk di keranjang:", error);
+    res.status(500).json({
+      message: "Gagal mengambil jumlah produk di keranjang",
+      error: error.message
+    });
+  }
+});
+
+// ==========================
+// WISHLIST USER RUTE
+// ==========================
+
+// =====  1. TAMBAH/HAPUS PRODUK KEDALAM ATAU DARI WISHLIST  =====
+router.patch("/wishlist/toggle/:productId", verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { productId } = req.params;
+
+    // Validasi ObjectId
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+      return res.status(400).json({ message: "ID produk tidak valid" });
+    }
+
+    // Cek produk
+    const product = await Product.findById(productId);
+    if (!product) {
+      return res.status(404).json({ message: "Produk tidak ditemukan" });
+    }
+
+    // Cek user
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    // Cek apakah produk sudah ada di wishlist
+    const index = user.wishlist.findIndex(
+      (id) => id.toString() === productId
+    );
+
+    let actionMessage;
+
+    if (index > -1) {
+      // Jika sudah ada → hapus dari wishlist
+      user.wishlist.splice(index, 1);
+      actionMessage = "Produk berhasil dihapus dari wishlist";
+    } else {
+      // Jika belum ada → tambahkan ke wishlist
+      user.wishlist.push(productId);
+      actionMessage = "Produk berhasil ditambahkan ke wishlist";
+    }
+
+    await user.save();
+
+    // Populate agar respons berisi detail produk
+    const populatedUser = await User.findById(userId)
+      .populate("wishlist", "name price stock productImagesURL");
+
+    return res.status(200).json({
+      success: true,
+      message: actionMessage,
+      wishlist: populatedUser.wishlist,
+    });
+
+  } catch (error) {
+    console.error("❌ Error toggle wishlist:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Gagal memproses wishlist",
+      error: error.message,
+    });
+  }
+});
+
+// =====  2. MENDAPATKAN DATA DAFTAR PRODUK DALAM WISHLIST  =====
+router.get('/wishlist', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { name, brand, category, gender } = req.query;
+
+    // Temukan user dan populate wishlist
+    const user = await User.findById(userId).populate('wishlist');
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    // Hapus produk yang sudah tidak ada dari wishlist
+    const validWishlist = user.wishlist.filter(product => product !== null);
+    if (validWishlist.length !== user.wishlist.length) {
+      user.wishlist = validWishlist.map(p => p._id); // simpan hanya ID yang valid
+      await user.save();
+    }
+
+    // Jika tidak ada filter, kembalikan semua produk
+    if (!name && !brand && !category && !gender) {
+      return res.status(200).json({
+        message: "Berhasil mengambil semua produk di wishlist",
+        wishlist: validWishlist
+      });
+    }
+
+    // Lakukan filter dinamis berdasarkan query
+    const filteredWishlist = validWishlist.filter(product => {
+      let isMatch = true;
+
+      if (name) {
+        const regex = new RegExp(name, 'i');
+        isMatch = isMatch && regex.test(product.name);
+      }
+
+      if (brand) {
+        const regex = new RegExp(brand, 'i');
+        isMatch = isMatch && regex.test(product.brand);
+      }
+
+      if (category) {
+        const regex = new RegExp(category, 'i');
+        isMatch = isMatch && regex.test(product.category);
+      }
+
+      if (gender) {
+        isMatch = isMatch && product.gender === gender;
+      }
+
+      return isMatch;
+    });
+
+    // Jika tidak ada hasil
+    if (filteredWishlist.length === 0) {
+      return res.status(404).json({
+        message: "Tidak ada produk di wishlist yang cocok dengan filter"
+      });
+    }
+
+    // Jika berhasil
+    res.status(200).json({
+      message: "Berhasil mengambil data produk sesuai filter",
+      wishlist: filteredWishlist
+    });
+
+  } catch (error) {
+    console.error("❌ Error mengambil wishlist:", error);
+    res.status(500).json({
+      message: "Gagal mengambil data wishlist",
+      error: error.message
+    });
+  }
+});
+
+// =====  3. MENDAPATKAN TOTAL PRODUK DALAM WISHLIST  =====
+router.get('/wishlist/count', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const user = await User.findById(userId);
+
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    // Hitung jumlah item di wishlist
+    const totalWishlistItems = user.wishlist.length;
+
+    res.status(200).json({ totalWishlistItems });
+  } catch (error) {
+    console.error("Error mengambil jumlah wishlist:", error);
+    res.status(500).json({ message: "Gagal mengambil jumlah wishlist", error: error.message });
+  }
+});
+
+// ==========================
+// NOTIFICATION USER RUTE
+// ==========================
+
+// =====  1. MENDAPATKAN DATA NOTIFIKASI PENGGUNA (FILTER STATUS belum-dibaca" atau "sudah-dibaca")  =====
+router.get('/notifications', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { status } = req.query; // "belum-dibaca" atau "sudah-dibaca"
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    let notifications = user.userNotification;
+
+    // Jika query status diberikan, lakukan filter
+    if (status) {
+      notifications = notifications.filter(n => n.statusNotification === status);
+    }
+
+    res.status(200).json({
+      message: "Berhasil mengambil notifikasi",
+      count: notifications.length,
+      notifications,
+    });
+  } catch (error) {
+    console.error("Error mengambil notifikasi:", error);
+    res.status(500).json({ message: "Gagal mengambil notifikasi", error: error.message });
+  }
+});
+
+// =====  2. UBAH STATUS NOTIFIKASI MENJADI "sudah-dibaca"  =====
+router.patch('/notifications/:notificationId/read', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { notificationId } = req.params;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    const notification = user.userNotification.id(notificationId);
+    if (!notification) {
+      return res.status(404).json({ message: "Notifikasi tidak ditemukan" });
+    }
+
+    notification.statusNotification = "sudah-dibaca";
+    await user.save();
+
+    res.status(200).json({
+      message: "Status notifikasi berhasil diubah menjadi sudah dibaca",
+      notification,
+    });
+  } catch (error) {
+    console.error("Error memperbarui notifikasi:", error);
+    res.status(500).json({ message: "Gagal memperbarui notifikasi", error: error.message });
+  }
+});
+
+// =====  3. UBAH SEMUA STATUS NOTIFIKASI MENJADI "sudah-dibaca"  =====
+router.patch('/notifications/read-all', verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan" });
+    }
+
+    if (!user.userNotification || user.userNotification.length === 0) {
+      return res.status(200).json({ message: "Tidak ada notifikasi untuk diperbarui" });
+    }
+
+    // Ubah semua statusNotification menjadi "sudah-dibaca"
+    user.userNotification.forEach(notification => {
+      if (notification.statusNotification === "belum-dibaca") {
+        notification.statusNotification = "sudah-dibaca";
+      }
+    });
+
+    await user.save();
+
+    res.status(200).json({
+      message: "Semua notifikasi telah ditandai sebagai sudah dibaca",
+      totalUpdated: user.userNotification.length
+    });
+  } catch (error) {
+    console.error("Error memperbarui semua notifikasi:", error);
+    res.status(500).json({
+      message: "Gagal memperbarui semua notifikasi",
+      error: error.message
+    });
+  }
+});
+
+// ==========================
+// VOUCHER USER RUTE
+// ==========================
+
+// =====  1. CLAIM VOUCHER  =====
+router.post("/claim/:voucherId", verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { voucherId } = req.params;
+
+    //  1. Cek apakah voucher ada
+    const voucher = await Voucher.findById(voucherId);
+    if (!voucher) {
+      return res.status(404).json({
+        success: false,
+        message: "Voucher tidak ditemukan.",
+      });
+    }
+
+    //   Cek apakah voucher aktif
+    if (!voucher.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: "Voucher ini tidak aktif atau sudah dinonaktifkan.",
+      });
+    }
+
+    //   Cek apakah voucher sudah melewati batas klaim global
+    if (voucher.claimedCount >= voucher.maxUse) {
+      return res.status(400).json({
+        success: false,
+        message: "Voucher sudah mencapai batas klaim maksimal.",
+      });
+    }
+
+    //   Cek apakah pengguna sudah pernah klaim voucher ini
+    const userHasClaimed = await User.findOne({
+      _id: userId,
+      "vouchers.voucher": voucherId,
+    });
+
+    if (userHasClaimed) {
+      return res.status(400).json({
+        success: false,
+        message: "Kamu sudah pernah mengklaim voucher ini.",
+      });
+    }
+
+    //   Klaim voucher
+    await User.findByIdAndUpdate(userId, {
+      $push: { vouchers: { voucher: voucherId, isUsed: false } },
+    });
+
+    //   Tambahkan claimedCount
+    voucher.claimedCount += 1;
+    await voucher.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Voucher berhasil diklaim.",
+      voucher,
+    });
+  } catch (error) {
+    console.error("❌ Error saat klaim voucher:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Terjadi kesalahan saat klaim voucher.",
+      error: error.message,
+    });
+  }
+});
+
+// =====  2. MENDAPATKAN DATA DAFTAR VOUCHER TERSEDIA  =====
+router.get("/my-vouchers", verifyUser, async (req, res) => {
+  try {
+    const userId = req.user._id;
+
+    // Populate voucher dari koleksi Voucher
+    const user = await User.findById(userId).populate({
+      path: "vouchers.voucher",
+      model: "Voucher",
+      select: "title code description discountType discountValue expiryDate isActive",
+    });
+
+    if (!user) {
+      return res.status(404).json({ message: "Pengguna tidak ditemukan." });
+    }
+
+    // Filter jika kamu hanya ingin menampilkan voucher yang aktif
+    const claimedVouchers = user.vouchers.map((v) => ({
+      _id: v.voucher?._id,
+      title: v.voucher?.title,
+      code: v.voucher?.code,
+      description: v.voucher?.description,
+      discountType: v.voucher?.discountType,
+      discountValue: v.voucher?.discountValue,
+      expiryDate: v.voucher?.expiryDate,
+      isActive: v.voucher?.isActive,
+      isUsed: v.isUsed,
+      claimedAt: v.claimedAt,
+    }));
+
+    return res.status(200).json({
+      message: "Daftar voucher yang sudah kamu klaim.",
+      vouchers: claimedVouchers,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({
+      message: "Gagal mengambil daftar voucher.",
+      error,
+    });
+  }
+});
 
 // ==========================
 // GET USER DATA RUTE

@@ -7,6 +7,8 @@ import cookieParser from 'cookie-parser'
 import { userRouter } from './routes/users.js'
 import { AdminRouter } from './routes/admins.js'
 import { imageRouter } from './routes/image.js'
+import { productRouter } from './routes/products.js'
+import { voucherRouter } from './routes/vouchers.js'
 
 dotenv.config();
 const app = express()
@@ -25,6 +27,8 @@ app.use((req, res, next) => {
 app.use('/user', userRouter)
 app.use('/admin', AdminRouter)
 app.use('/image',imageRouter)
+app.use('/product', productRouter)
+app.use('/voucher', voucherRouter)
 
 mongoose.connect(process.env.MONGO_ATLAS, {
     useNewUrlParser: true,

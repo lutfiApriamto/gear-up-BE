@@ -11,17 +11,20 @@ const ProductSchema = new Schema({
   discountPrice: Number,
   stock: { type: Number, required: true },
   productImages: [String],
+  productImagesURL: [String],
   soldCount: { type: Number, default: 0 },
   tags: [String],
 
   colorOptions: [{
       color : String,
       image : String,
+      imageURL : String,
   }],
 
   sizeOptions: [{
       size : String,
       image : String,
+      imageimageURL : String,
   }],
 
   gender: { type: String, enum: ["men", "women", "kids", "unisex"] },
